@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC Chatroom</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #f4f4f4;
+        }
+
+        #chat-container {
+            background-color: white;
+            border: 1px solid #ccc;
+            padding: 20px;
+            width: 400px;
+            border-radius: 8px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        #messages {
+            height: 300px;
+            overflow-y: auto;
+            border-bottom: 1px solid #ddd;
+            margin-bottom: 10px;
+            padding-right: 5px;
+        }
+
+        #messages p {
+            background-color: #f1f1f1;
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 5px;
+        }
+
+        #messageInput {
+            width: calc(100% - 90px);
+            padding: 10px;
+            margin-right: 10px;
+            border-radius: 5px;
+            border: 1px solid #ccc;
+        }
+
+        #sendButton {
+            padding: 10px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+
+        #sendButton:hover {
+            background-color: #0056b3;
+        }
+
+        #connectionStatus {
+            margin-top: 10px;
+            color: gray;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div id="chat-container">
+        <h1>WebRTC Chatroom</h1>
+        <div id="messages"></div>
+        <input type="text" id="messageInput" placeholder="Type your message..." />
+        <button id="sendButton">Send</button>
+        <div id="connectionStatus">Waiting for another peer to connect...</div>
+    </div>
+
+    <!-- Include Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-database.js"></script>
+
+    <script>
+        // Initialize Firebase
+        const firebaseConfig = {
+              apiKey: "AIzaSyArHllWrtMYEijjD90VKED-AdmUrlPoyFI",
+  authDomain: "chatapp-5b5b6.firebaseapp.com",
+  databaseURL: "https://chatapp-5b5b6-default-rtdb.firebaseio.com",
+  projectId: "chatapp-5b5b6",
+  storageBucket: "chatapp-5b5b6.firebasestorage.app",
+  messagingSenderId: "516010697082",
+  appId: "1:516010697082:web:60c823840882e973b236c3",
+  measurementId: "G-0VD07PSJY6"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const database = firebase.database();
+
+        const messagesDiv = document.getElementById('messages');
+        const messageInput = document.getElementById('messageInput');
+        const sendButton = document.getElementById('sendButton');
+        const connectionStatus = document.getElementById('connectionStatus');
+
+        let localConnection;
+        let remoteConnection;
+        let sendChannel;
+        let receiveChannel;
+
+        const signalingRef = database.ref('webrtc-chatroom');
+
+        // Signaling channel
+        signalingRef.on('child_added', function(snapshot) {
+            const message = snapshot.val();
+            if (message.offer) {
+                handleOffer(message.offer);
+            } else if (message.answer) {
+                handleAnswer(message.answer);
+            } else if (message.iceCandidate) {
+                handleIceCandidate(message.iceCandidate);
+            }
+        });
+
+        // When a message is typed and the "Send" button is clicked, send the message
+        sendButton.addEventListener('click', () => {
+            const message = messageInput.value.trim();
+            if (message) {
+                sendMessage(message);
+                messageInput.value = ''; // Clear input
+            }
+        });
+
+        // Set up the WebRTC connection
+        function setupConnection() {
+            localConnection = new RTCPeerConnection();
+            sendChannel = localConnection.createDataChannel("sendDataChannel");
+
+            sendChannel.onopen = () => console.log("Data channel opened");
+            sendChannel.onclose = () => console.log("Data channel closed");
+
+            sendChannel.onmessage = (event) => {
+                displayMessage(event.data, "Remote");
+            };
+
+            localConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    sendIceCandidate(event.candidate);
+                }
+            };
+
+            remoteConnection = new RTCPeerConnection();
+            remoteConnection.ondatachannel = receiveChannelCallback;
+            remoteConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    sendIceCandidate(event.candidate);
+                }
+            };
+
+            localConnection.createOffer().then((offer) => {
+                localConnection.setLocalDescription(offer);
+                remoteConnection.setRemoteDescription(offer);
+                remoteConnection.createAnswer().then((answer) => {
+                    remoteConnection.setLocalDescription(answer);
+                    localConnection.setRemoteDescription(answer);
+
+                    sendMessage({ answer: answer });
+                    connectionStatus.textContent = "Peer connected!";
+                });
+            });
+        }
+
+        // Handle incoming offer
+        function handleOffer(offer) {
+            remoteConnection.setRemoteDescription(new RTCSessionDescription(offer));
+            remoteConnection.createAnswer().then((answer) => {
+                remoteConnection.setLocalDescription(answer);
+                sendMessage({ answer: answer });
+            });
+        }
+
+        // Handle incoming answer
+        function handleAnswer(answer) {
+            localConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        }
+
+        // Handle incoming ICE candidates
+        function handleIceCandidate(candidate) {
+            localConnection.addIceCandidate(new RTCIceCandidate(candidate));
+            remoteConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        }
+
+        // Callback for receiving data on the remote connection
+        function receiveChannelCallback(event) {
+            receiveChannel = event.channel;
+            receiveChannel.onmessage = (event) => {
+                displayMessage(event.data, "You");
+            };
+        }
+
+        // Send message via Firebase
+        function sendMessage(message) {
+            signalingRef.push().set(message);
+        }
+
+        // Send ICE candidate to Firebase
+        function sendIceCandidate(candidate) {
+            sendMessage({ iceCandidate: candidate });
+        }
+
+        // Display a message in the chat
+        function displayMessage(message, sender) {
+            const messageElement = document.createElement('p');
+            messageElement.textContent = `${sender}: ${message}`;
+            messagesDiv.appendChild(messageElement);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // Start the WebRTC connection
+        setupConnection();
+    </script>
+</body>
+</html>
